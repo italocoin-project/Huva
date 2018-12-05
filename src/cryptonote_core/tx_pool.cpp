@@ -1161,9 +1161,7 @@ namespace cryptonote
     get_block_reward(median_weight, total_weight, already_generated_coins, best_coinbase, version);
 
 
-    size_t max_total_weight_pre_v5 = (130 * median_weight) / 100 - CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE;
-    size_t max_total_weight_v5 = 2 * median_weight - CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE;
-    size_t max_total_weight = version >= 5 ? max_total_weight_v5 : max_total_weight_pre_v5;
+    size_t max_total_weight = 2 * median_weight - CRYPTONOTE_COINBASE_BLOB_RESERVED_SIZE;
     std::unordered_set<crypto::key_image> k_images;
 
     LOG_PRINT_L2("Filling block template, median weight " << median_weight << ", " << m_txs_by_fee_and_receive_time.size() << " txes in the pool");

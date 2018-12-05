@@ -1122,24 +1122,11 @@ bool Blockchain::validate_miner_transaction(const block& b, size_t cumulative_bl
     MERROR_VER("coinbase transaction spend too much money (" << print_money(money_in_use) << "). Block reward is " << print_money(base_reward + fee) << "(" << print_money(base_reward) << "+" << print_money(fee) << ")");
     return false;
   }
-  // From hard fork 2, we allow a miner to claim less block reward than is allowed, in case a miner wants less dust
-  if (m_hardfork->get_current_version() < 2)
+  
+  if(base_reward + fee != money_in_use)
   {
-    if(base_reward + fee != money_in_use)
-    {
-      MDEBUG("coinbase transaction doesn't use full amount of block reward:  spent: " << money_in_use << ",  block reward " << base_reward + fee << "(" << base_reward << "+" << fee << ")");
-      return false;
-    }
-  }
-  else
-  {
-    // from hard fork 2, since a miner can claim less than the full block reward, we update the base_reward
-    // to show the amount of coins that were actually generated, the remainder will be pushed back for later
-    // emission. This modifies the emission curve very slightly.
-    CHECK_AND_ASSERT_MES(money_in_use - fee <= base_reward, false, "base reward calculation bug");
-    if(base_reward + fee != money_in_use)
-      partial_block_reward = true;
-    base_reward = money_in_use - fee;
+    MDEBUG("coinbase transaction doesn't use full amount of block reward:  spent: " << money_in_use << ",  block reward " << base_reward + fee << "(" << base_reward << "+" << fee << ")");
+    return false;
   }
   return true;
 }
@@ -1302,7 +1289,7 @@ bool Blockchain::create_block_template(block& b, const account_public_address& m
    */
   //make blocks coin-base tx looks close to real coinbase tx to get truthful blob weight
   uint8_t hf_version = m_hardfork->get_current_version();
-  size_t max_outs = hf_version >= 4 ? 1 : 11;
+  size_t max_outs = 1;
   bool r = construct_miner_tx(height, median_weight, already_generated_coins, txs_weight, fee, miner_address, b.miner_tx, ex_nonce, max_outs, hf_version);
   CHECK_AND_ASSERT_MES(r, false, "Failed to construct miner tx, first chance");
   size_t cumulative_weight = txs_weight + get_transaction_weight(b.miner_tx);
@@ -1777,14 +1764,7 @@ bool Blockchain::get_output_distribution(uint64_t amount, uint64_t from_height, 
   // rct outputs don't exist before v4
   if (amount == 0)
   {
-    switch (m_nettype)
-    {
-      case STAGENET: start_height = stagenet_hard_forks[3].height; break;
-      case TESTNET: start_height = testnet_hard_forks[3].height; break;
-      case MAINNET: start_height = mainnet_hard_forks[3].height; break;
-      case FAKECHAIN: start_height = 0; break;
-      default: return false;
-    }
+     start_height = 1;
   }
   else
     start_height = 0;
@@ -2312,7 +2292,7 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
   const uint8_t hf_version = m_hardfork->get_current_version();
 
   // from hard fork 2, we forbid dust and compound outputs
-  if (hf_version >= 2) {
+
     for (auto &o: tx.vout) {
       if (tx.version == 1)
       {
@@ -2322,10 +2302,8 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
         }
       }
     }
-  }
 
   // in a v2 tx, all outputs must have 0 amount
-  if (hf_version >= 3) {
     if (tx.version >= 2) {
       for (auto &o: tx.vout) {
         if (o.amount != 0) {
@@ -2334,10 +2312,8 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
         }
       }
     }
-  }
 
   // from v4, forbid invalid pubkeys
-  if (hf_version >= 4) {
     for (const auto &o: tx.vout) {
       if (o.target.type() == typeid(txout_to_key)) {
         const txout_to_key& out_to_key = boost::get<txout_to_key>(o.target);
@@ -2347,7 +2323,6 @@ bool Blockchain::check_tx_outputs(const transaction& tx, tx_verification_context
         }
       }
     }
-  }
 
   // from v8, allow bulletproofs
   if (hf_version < 8) {
@@ -2479,11 +2454,11 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
 
   // from hard fork 2, we require mixin at least 2 unless one output cannot mix with 2 others
   // if one output cannot mix with 2 others, we accept at most 1 output that can mix
-  if (hf_version >= 2)
+  if (hf_version >= 1)
   {
     size_t n_unmixable = 0, n_mixable = 0;
     size_t mixin = std::numeric_limits<size_t>::max();
-    const size_t min_mixin = hf_version >= HF_VERSION_MIN_MIXIN_10 ? 10 : hf_version >= HF_VERSION_MIN_MIXIN_6 ? 6 : hf_version >= HF_VERSION_MIN_MIXIN_4 ? 4 : 2;
+    const size_t min_mixin = hf_version >= HF_VERSION_MIN_MIXIN_9 ? 9 : 4;
     for (const auto& txin : tx.vin)
     {
       // non txin_to_key inputs will be rejected below
@@ -2542,7 +2517,7 @@ bool Blockchain::check_tx_inputs(transaction& tx, tx_verification_context &tvc, 
       tvc.m_verifivation_failed = true;
       return false;
     }
-    const size_t min_tx_version = (n_unmixable > 0 ? 1 : (hf_version >= HF_VERSION_ENFORCE_RCT) ? 2 : 1);
+    const size_t min_tx_version =  2;
     if (tx.version < min_tx_version)
     {
       MERROR_VER("transaction version " << (unsigned)tx.version << " is lower than min accepted version " << min_tx_version);
@@ -2898,7 +2873,7 @@ uint64_t Blockchain::get_dynamic_base_fee(uint64_t block_reward, size_t median_b
     return lo;
   }
 
-  const uint64_t fee_base = version >= 5 ? DYNAMIC_FEE_PER_KB_BASE_FEE_V5 : DYNAMIC_FEE_PER_KB_BASE_FEE;
+  const uint64_t fee_base = DYNAMIC_FEE_PER_KB_BASE_FEE;
 
   uint64_t unscaled_fee_base = (fee_base * min_block_weight / median_block_weight);
   lo = mul128(unscaled_fee_base, block_reward, &hi);
@@ -3025,7 +3000,7 @@ bool Blockchain::is_tx_spendtime_unlocked(uint64_t unlock_time) const
   {
     //interpret as time
     uint64_t current_time = static_cast<uint64_t>(time(NULL));
-    if(current_time + (get_current_hard_fork_version() < 2 ? CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_V1 : CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_V2) >= unlock_time)
+    if(current_time + CRYPTONOTE_LOCKED_TX_ALLOWED_DELTA_SECONDS_V1 >= unlock_time)
       return true;
     else
       return false;
